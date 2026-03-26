@@ -1,7 +1,7 @@
 {
   "name": "com.api-haus.steamdeck-deploy",
   "displayName": "Steam Deck Deploy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Deploy built Unity applications to Steam Deck via SSH/rsync",
   "unity": "6000.0",
   "dependencies": {},

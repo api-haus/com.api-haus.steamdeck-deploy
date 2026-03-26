@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.0.0...v1.1.0) (2026-03-26)
+
+
+### Features
+
+* kill previous game instance before launching new one ([5624f4c](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/5624f4cbd6e036998733a09903342bd88febc112))
+
 # 1.0.0 (2026-03-26)
 
 
