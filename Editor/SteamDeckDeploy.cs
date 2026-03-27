@@ -153,6 +153,90 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       return await SshCommand(cmd);
     }
 
+    public static async Task<bool> Push(
+      string localPath,
+      string remotePath,
+      string extraArgs = null
+    )
+    {
+      var settings = SteamDeckDeploySettings.Instance;
+      if (!settings.Validate(out var error))
+      {
+        Debug.LogError($"{Tag} {error}");
+        return false;
+      }
+
+      var sshCmd = $"ssh -i \"{settings.ResolvedSshKeyPath}\" -o StrictHostKeyChecking=accept-new";
+      var remote = $"{settings.username}@{settings.ipAddress}:{remotePath}/";
+
+      var args = $"-avz {extraArgs ?? ""} -e \"{sshCmd}\" \"{localPath}/\" \"{remote}\"".Trim();
+
+      Debug.Log($"{Tag} push → {settings.ipAddress}:{remotePath}");
+      var result = await ProcessRunner.RunAsync("rsync", args);
+
+      if (!result.Success)
+        Debug.LogError($"{Tag} push failed (exit {result.ExitCode}):\n{result.Error}");
+
+      return result.Success;
+    }
+
+    public static async Task<bool> Pull(
+      string remotePath,
+      string localPath,
+      string extraArgs = null
+    )
+    {
+      var settings = SteamDeckDeploySettings.Instance;
+      if (!settings.Validate(out var error))
+      {
+        Debug.LogError($"{Tag} {error}");
+        return false;
+      }
+
+      var sshCmd = $"ssh -i \"{settings.ResolvedSshKeyPath}\" -o StrictHostKeyChecking=accept-new";
+      var remote = $"{settings.username}@{settings.ipAddress}:{remotePath}/";
+
+      Directory.CreateDirectory(localPath);
+
+      var args = $"-avz {extraArgs ?? ""} -e \"{sshCmd}\" \"{remote}\" \"{localPath}/\"".Trim();
+
+      Debug.Log($"{Tag} pull ← {settings.ipAddress}:{remotePath}");
+      var result = await ProcessRunner.RunAsync("rsync", args);
+
+      if (!result.Success)
+        Debug.LogError($"{Tag} pull failed (exit {result.ExitCode}):\n{result.Error}");
+
+      return result.Success;
+    }
+
+    public static async Task<(bool success, string output)> Ssh(string command, int timeoutMs = 30_000)
+    {
+      var settings = SteamDeckDeploySettings.Instance;
+      if (!settings.Validate(out var error))
+      {
+        Debug.LogError($"{Tag} {error}");
+        return (false, error);
+      }
+
+      var result = await ProcessRunner.RunAsync(
+        "ssh",
+        new[]
+        {
+          "-i", settings.ResolvedSshKeyPath,
+          "-o", "StrictHostKeyChecking=accept-new",
+          "-o", "ConnectTimeout=10",
+          $"{settings.username}@{settings.ipAddress}",
+          command,
+        },
+        timeoutMs
+      );
+
+      if (!result.Success)
+        Debug.LogError($"{Tag} SSH failed (exit {result.ExitCode}):\n{result.Error}");
+
+      return (result.Success, result.Output);
+    }
+
     static async Task<bool> UploadScripts()
     {
       // Find Scripts~ directory relative to the package
