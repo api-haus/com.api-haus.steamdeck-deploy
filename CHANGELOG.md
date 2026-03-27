@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.1.0...v1.2.0) (2026-03-27)
+
+
+### Features
+
+* push/pull functions to rsync files to and fro the deck ([99a151f](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/99a151feee1714146a54621f0f0b3e67e7cb4691))
+
 # [1.1.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.0.0...v1.1.0) (2026-03-26)
 
 
