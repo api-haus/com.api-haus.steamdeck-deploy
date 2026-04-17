@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
@@ -43,7 +47,8 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
 
       var productName = PlayerSettings.productName;
-      var remoteGameDir = $"{settings.remoteBasePath}/{productName}_Linux";
+      var gameId = BuildGameId(productName);
+      var remoteGameDir = $"{settings.remoteBasePath}/{gameId}";
       var executable = FindExecutable(buildOutputPath, productName);
 
       // Step 1: Upload helper scripts
@@ -56,20 +61,25 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       if (!await Rsync(buildOutputPath, remoteGameDir))
         return Fail("Rsync failed");
 
-      // Step 3: Register game shortcut
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Registering game shortcut...", 0.6f);
-      var launchArgsFull = $"./{executable}";
-      if (!string.IsNullOrEmpty(settings.launchArgs))
-        launchArgsFull += $" {settings.launchArgs}";
+      // Step 2.5: Install launch.sh wrapper on the deck. Steam devkit's
+      // create-shortcut IPC tokenizes argv on whitespace, so executables with
+      // spaces (e.g. product names with spaces) would otherwise fail to
+      // register. Routing through a fixed-name wrapper keeps argv space-free.
+      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Installing launch wrapper...", 0.55f);
+      if (!await WriteLaunchScript(remoteGameDir, executable))
+        return Fail("Launch wrapper install failed");
 
-      if (!await RegisterGame(productName, remoteGameDir, launchArgsFull))
+      // Step 3: Register game shortcut (argv[0] = wrapper, extras as separate elements)
+      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Registering game shortcut...", 0.6f);
+      var extraArgs = SplitLaunchArgs(settings.launchArgs);
+      if (!await RegisterGame(gameId, remoteGameDir, "./launch.sh", extraArgs))
         return Fail("Game registration failed");
 
       // Step 4: Launch (optional)
       if (launch)
       {
         EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Launching game...", 0.9f);
-        if (!await LaunchGame(productName))
+        if (!await LaunchGame(gameId))
           return Fail("Game launch failed");
       }
 
@@ -127,30 +137,67 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       return result.Success;
     }
 
-    public static async Task<bool> RegisterGame(string gameName, string remoteGameDir, string argv)
+    public static async Task<bool> RegisterGame(
+      string gameId,
+      string remoteGameDir,
+      string exe,
+      IEnumerable<string> extraArgs = null
+    )
     {
-      var gameId = $"{gameName}_Linux";
+      var argvElements = new List<string> { exe };
+      if (extraArgs != null)
+        argvElements.AddRange(extraArgs.Where(a => !string.IsNullOrEmpty(a)));
 
+      var argvJson =
+        "[" + string.Join(",", argvElements.Select(a => "\"" + JsonEscape(a) + "\"")) + "]";
       var parms =
-        $"{{\"gameid\":\"{gameId}\","
-        + $"\"directory\":\"{remoteGameDir}\","
-        + $"\"argv\":[\"{argv}\"],"
-        + $"\"settings\":{{\"steam_play\":\"0\"}}}}";
+        "{\"gameid\":\"" + JsonEscape(gameId) + "\","
+        + "\"directory\":\"" + JsonEscape(remoteGameDir) + "\","
+        + "\"argv\":" + argvJson + ","
+        + "\"settings\":{\"steam_play\":\"0\"}}";
 
-      var cmd = $"python3 ~/devkit-utils/steam-client-create-shortcut --parms '{parms}'";
+      var cmd = "python3 ~/devkit-utils/steam-client-create-shortcut --parms " + ShellSingleQuote(parms);
 
-      Debug.Log($"{Tag} Registering shortcut: {gameId}");
+      Debug.Log($"{Tag} Registering shortcut: {gameId} → {exe}");
       return await SshCommand(cmd);
     }
 
-    public static async Task<bool> LaunchGame(string gameName)
+    public static async Task<bool> LaunchGame(string gameId)
     {
-      var gameId = $"{gameName}_Linux";
-      var parms = $"{{\"gameid\":\"{gameId}\"}}";
-      var cmd = $"python3 {RemoteScriptsDir}/unity-run-game --parms '{parms}'";
+      var parms = "{\"gameid\":\"" + JsonEscape(gameId) + "\"}";
+      var cmd = $"python3 {RemoteScriptsDir}/unity-run-game --parms " + ShellSingleQuote(parms);
 
       Debug.Log($"{Tag} Launching: {gameId}");
       return await SshCommand(cmd);
+    }
+
+    /// <summary>
+    /// Writes a bash launcher to the remote game directory that cd's into the
+    /// directory and execs the real game binary. This keeps Steam's devkit IPC
+    /// (which tokenizes argv on whitespace) from ever seeing the real exe name,
+    /// so product names with spaces or special characters work reliably.
+    /// </summary>
+    static async Task<bool> WriteLaunchScript(string remoteGameDir, string exeFileName)
+    {
+      var script =
+        "#!/usr/bin/env bash\n"
+        + "set -e\n"
+        + "cd \"$(dirname \"$(readlink -f \"$0\")\")\"\n"
+        + "exec " + ShellSingleQuote("./" + exeFileName) + " \"$@\"\n";
+
+      var launchPath = remoteGameDir + "/launch.sh";
+      // Use a heredoc with a sentinel unlikely to appear in the script body.
+      // The outer command is already passed to SshCommand as a single argv
+      // element, so we only need shell-safe quoting around the target paths.
+      var remoteCmd =
+        "mkdir -p " + ShellSingleQuote(remoteGameDir) + " && "
+        + "cat > " + ShellSingleQuote(launchPath) + " <<'__APIHAUS_LAUNCH_EOF__'\n"
+        + script
+        + "__APIHAUS_LAUNCH_EOF__\n"
+        + "chmod +x " + ShellSingleQuote(launchPath);
+
+      Debug.Log($"{Tag} Installing launch.sh → {launchPath}");
+      return await SshCommand(remoteCmd);
     }
 
     public static async Task<bool> Push(
@@ -298,6 +345,84 @@ namespace ApiHaus.SteamDeckDeploy.Editor
         $"{Tag} Auto-discovered Steam Deck: {device.Name} at {device.Address} (user: {device.Username})"
       );
       return true;
+    }
+
+    /// <summary>
+    /// Derives a whitespace- and punctuation-free gameid from a product name.
+    /// Used as the Steam shortcut key and as the remote game directory name —
+    /// both paths flow through shell commands and Steam URL params that cannot
+    /// tolerate spaces. Preserves case, digits, underscores, and hyphens.
+    /// </summary>
+    static string BuildGameId(string productName)
+    {
+      if (string.IsNullOrWhiteSpace(productName))
+        return "unity_game_Linux";
+
+      var sb = new StringBuilder(productName.Length);
+      foreach (var ch in productName)
+      {
+        if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '-')
+          sb.Append(ch);
+        else if (sb.Length > 0 && sb[sb.Length - 1] != '_')
+          sb.Append('_');
+      }
+
+      var slug = sb.ToString().Trim('_');
+      if (string.IsNullOrEmpty(slug))
+        slug = "unity_game";
+      return slug + "_Linux";
+    }
+
+    /// <summary>
+    /// Splits user-provided launch args on whitespace. Simple split is
+    /// sufficient — args containing spaces must be supplied via a settings
+    /// field upgrade (not currently exposed).
+    /// </summary>
+    static string[] SplitLaunchArgs(string raw)
+    {
+      if (string.IsNullOrWhiteSpace(raw))
+        return Array.Empty<string>();
+      return raw.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    static string JsonEscape(string s)
+    {
+      if (string.IsNullOrEmpty(s))
+        return string.Empty;
+
+      var sb = new StringBuilder(s.Length + 2);
+      foreach (var c in s)
+      {
+        switch (c)
+        {
+          case '"': sb.Append("\\\""); break;
+          case '\\': sb.Append("\\\\"); break;
+          case '\b': sb.Append("\\b"); break;
+          case '\f': sb.Append("\\f"); break;
+          case '\n': sb.Append("\\n"); break;
+          case '\r': sb.Append("\\r"); break;
+          case '\t': sb.Append("\\t"); break;
+          default:
+            if (c < 0x20)
+              sb.Append("\\u").Append(((int)c).ToString("x4"));
+            else
+              sb.Append(c);
+            break;
+        }
+      }
+      return sb.ToString();
+    }
+
+    /// <summary>
+    /// Wraps a string in single quotes for safe inclusion in a bash command
+    /// line. Single quotes inside the input are handled via the standard
+    /// '\'' escape sequence.
+    /// </summary>
+    static string ShellSingleQuote(string s)
+    {
+      if (s == null)
+        return "''";
+      return "'" + s.Replace("'", "'\\''") + "'";
     }
 
     static string FindExecutable(string buildDir, string productName)
