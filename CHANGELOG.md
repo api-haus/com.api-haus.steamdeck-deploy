@@ -1,3 +1,11 @@
+## [1.2.1](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.2.0...v1.2.1) (2026-04-18)
+
+
+### Bug Fixes
+
+* kill stale instances across Product Name renames ([3f5c06c](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/3f5c06c0c1e2da1a9c388b7c9f1376698bff498e))
+* support spaces in product name via launch.sh wrapper ([95217db](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/95217dbe5f74973d46dceebe5d784efd76321139))
+
 # [1.2.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.1.0...v1.2.0) (2026-03-27)
 
 
