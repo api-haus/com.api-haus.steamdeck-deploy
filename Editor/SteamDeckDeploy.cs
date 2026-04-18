@@ -179,11 +179,16 @@ namespace ApiHaus.SteamDeckDeploy.Editor
     /// </summary>
     static async Task<bool> WriteLaunchScript(string remoteGameDir, string exeFileName)
     {
+      // Use the absolute resolved path in the exec line (not a relative
+      // "./name") so that /proc/PID/cmdline for the game process contains
+      // the full devkit-game path — unity-run-game relies on that to find
+      // and kill stale instances after a product-name rename.
       var script =
         "#!/usr/bin/env bash\n"
         + "set -e\n"
-        + "cd \"$(dirname \"$(readlink -f \"$0\")\")\"\n"
-        + "exec " + ShellSingleQuote("./" + exeFileName) + " \"$@\"\n";
+        + "SELF_DIR=\"$(dirname \"$(readlink -f \"$0\")\")\"\n"
+        + "cd \"$SELF_DIR\"\n"
+        + "exec \"$SELF_DIR\"/" + ShellSingleQuote(exeFileName) + " \"$@\"\n";
 
       var launchPath = remoteGameDir + "/launch.sh";
       // Use a heredoc with a sentinel unlikely to appear in the script body.

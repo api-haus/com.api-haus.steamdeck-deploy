@@ -35,17 +35,24 @@ def main():
         print(json.dumps({'error': 'Steam client is not running'}))
         sys.exit(1)
 
-    # Kill any previously running instance of the game.
-    # Use pgrep to find matching PIDs, excluding our own process tree.
+    # Kill any previously running devkit game instance. We deliberately match
+    # the whole ~/devkit-game/ root rather than just this launch's gameid so
+    # that a rename of the Unity Product Name (which changes the gameid/slug)
+    # still stops the stale instance — otherwise pgrep -f <new-gameid> would
+    # miss processes launched under the old shortcut. This is only ever run
+    # on a dev kit where running multiple games concurrently is not a thing.
     own_pid = str(os.getpid())
+    own_ppid = str(os.getppid())
+    devkit_root = os.path.expanduser('~/devkit-game/')
     pgrep = subprocess.run(
-        ['pgrep', '-f', gameid],
+        ['pgrep', '-f', devkit_root],
         capture_output=True, text=True,
     )
     if pgrep.returncode == 0:
-        pids = [p for p in pgrep.stdout.strip().split('\n') if p != own_pid]
+        excluded = {own_pid, own_ppid}
+        pids = [p for p in pgrep.stdout.strip().split('\n') if p and p not in excluded]
         if pids:
-            logger.info('Killing previous instance of %s (pids: %s)', gameid, ','.join(pids))
+            logger.info('Killing previous devkit-game instance(s) (pids: %s)', ','.join(pids))
             subprocess.run(['kill', '-9'] + pids, capture_output=True)
             time.sleep(2)
         else:
