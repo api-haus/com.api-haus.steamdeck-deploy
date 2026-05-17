@@ -7,7 +7,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
   public class SteamDeckDeploySettings : ScriptableObject
   {
     internal const string AssetPath =
-      "Assets/Settings/SteamDeckDeploy/SteamDeckDeploySettings.asset";
+      "Packages/is.zori.testbed/Settings/SteamDeckDeploy/SteamDeckDeploySettings.asset";
 
     static SteamDeckDeploySettings s_Instance;
 
