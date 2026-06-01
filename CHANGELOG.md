@@ -1,3 +1,10 @@
+## [1.2.2](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.2.1...v1.2.2) (2026-06-01)
+
+
+### Bug Fixes
+
+* repoint SteamDeckDeploySettings AssetPath to is.zori.testbed ([f6d6a54](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/f6d6a54db5512756b94b9b828e9010d779642c56))
+
 ## [1.2.1](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.2.0...v1.2.1) (2026-04-18)
 
 
