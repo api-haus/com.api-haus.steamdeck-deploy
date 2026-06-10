@@ -5,6 +5,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEditor;
+using UnityEditor.Build.Profile;
+using UnityEditor.Build.Reporting;
 using UnityEngine;
 
 namespace ApiHaus.SteamDeckDeploy.Editor
@@ -47,9 +49,13 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
 
       var productName = PlayerSettings.productName;
-      var gameId = BuildGameId(productName);
-      var remoteGameDir = $"{settings.remoteBasePath}/{gameId}";
       var executable = FindExecutable(buildOutputPath, productName);
+      // The deck runs Linux builds natively and Windows builds through Proton;
+      // the executable extension is the signal for which, and it drives both the
+      // shortcut's platform suffix and the steam_play (Proton) flag below.
+      var isWindows = executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+      var gameId = BuildGameId(productName, isWindows);
+      var remoteGameDir = $"{settings.remoteBasePath}/{gameId}";
 
       // Step 1: Upload helper scripts
       EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Uploading scripts...", 0.1f);
@@ -72,7 +78,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       // Step 3: Register game shortcut (argv[0] = wrapper, extras as separate elements)
       EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Registering game shortcut...", 0.6f);
       var extraArgs = SplitLaunchArgs(settings.launchArgs);
-      if (!await RegisterGame(gameId, remoteGameDir, "./launch.sh", extraArgs))
+      if (!await RegisterGame(gameId, remoteGameDir, "./launch.sh", extraArgs, isWindows))
         return Fail("Game registration failed");
 
       // Step 4: Launch (optional)
@@ -86,6 +92,50 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       EditorUtility.ClearProgressBar();
       Debug.Log($"{Tag} Deploy completed successfully to {settings.ipAddress}");
       return true;
+    }
+
+    /// <summary>
+    /// Builds the project's currently active Build Profile and deploys the
+    /// result to the Steam Deck. The output path is derived from the project's
+    /// own product name and active build target — a Windows profile yields a
+    /// .exe (run via Proton), a Linux profile a .x86_64 (run natively) — so the
+    /// package carries no project-specific build path. This is the single entry
+    /// the "Build Current Profile to Steam Deck" menu item invokes, and is
+    /// equally callable from a consumer's own build script.
+    /// </summary>
+    public static async Task<bool> BuildActiveProfileAndDeploy(bool launch = true)
+    {
+      var profile = BuildProfile.GetActiveBuildProfile();
+      if (profile == null)
+        return Fail("No active build profile. Select one in File > Build Profiles.");
+
+      var target = EditorUserBuildSettings.activeBuildTarget;
+      var productName = PlayerSettings.productName;
+      var extension = target switch
+      {
+        BuildTarget.StandaloneWindows64 or BuildTarget.StandaloneWindows => ".exe",
+        BuildTarget.StandaloneLinux64 => ".x86_64",
+        _ => "",
+      };
+      var outputPath = $"Builds/{target}/{productName}{extension}";
+
+      EditorUtility.DisplayProgressBar("Steam Deck Deploy", $"Building {profile.name}...", 0.1f);
+      Debug.Log($"{Tag} Building '{productName}' ({target}) via profile '{profile.name}' → {outputPath}");
+
+      var report = BuildPipeline.BuildPlayer(
+        new BuildPlayerWithProfileOptions
+        {
+          buildProfile = profile,
+          locationPathName = outputPath,
+          options = BuildOptions.None,
+        }
+      );
+
+      if (report.summary.result != BuildResult.Succeeded)
+        return Fail($"Build failed: {report.summary.result}");
+
+      var buildDir = Path.GetDirectoryName(Path.GetFullPath(report.summary.outputPath));
+      return await Deploy(buildDir, launch);
     }
 
     public static async Task<bool> TestConnection()
@@ -141,7 +191,8 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       string gameId,
       string remoteGameDir,
       string exe,
-      IEnumerable<string> extraArgs = null
+      IEnumerable<string> extraArgs = null,
+      bool proton = false
     )
     {
       var argvElements = new List<string> { exe };
@@ -150,11 +201,13 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 
       var argvJson =
         "[" + string.Join(",", argvElements.Select(a => "\"" + JsonEscape(a) + "\"")) + "]";
+      // steam_play = 1 routes a Windows build through Proton on the deck; a
+      // native Linux build runs directly with it off.
       var parms =
         "{\"gameid\":\"" + JsonEscape(gameId) + "\","
         + "\"directory\":\"" + JsonEscape(remoteGameDir) + "\","
         + "\"argv\":" + argvJson + ","
-        + "\"settings\":{\"steam_play\":\"0\"}}";
+        + "\"settings\":{\"steam_play\":\"" + (proton ? "1" : "0") + "\"}}";
 
       var cmd = "python3 ~/devkit-utils/steam-client-create-shortcut --parms " + ShellSingleQuote(parms);
 
@@ -358,10 +411,11 @@ namespace ApiHaus.SteamDeckDeploy.Editor
     /// both paths flow through shell commands and Steam URL params that cannot
     /// tolerate spaces. Preserves case, digits, underscores, and hyphens.
     /// </summary>
-    static string BuildGameId(string productName)
+    static string BuildGameId(string productName, bool isWindows)
     {
+      var platformSuffix = isWindows ? "_Windows" : "_Linux";
       if (string.IsNullOrWhiteSpace(productName))
-        return "unity_game_Linux";
+        return "unity_game" + platformSuffix;
 
       var sb = new StringBuilder(productName.Length);
       foreach (var ch in productName)
@@ -375,7 +429,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       var slug = sb.ToString().Trim('_');
       if (string.IsNullOrEmpty(slug))
         slug = "unity_game";
-      return slug + "_Linux";
+      return slug + platformSuffix;
     }
 
     /// <summary>

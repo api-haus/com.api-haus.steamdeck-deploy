@@ -6,9 +6,6 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 {
   public class SteamDeckDeploySettings : ScriptableObject
   {
-    internal const string AssetPath =
-      "Packages/is.zori.testbed/Settings/SteamDeckDeploy/SteamDeckDeploySettings.asset";
-
     static SteamDeckDeploySettings s_Instance;
 
     public static SteamDeckDeploySettings Instance
@@ -17,13 +14,30 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       {
 #if UNITY_EDITOR
         if (s_Instance == null)
-          s_Instance = UnityEditor.AssetDatabase.LoadAssetAtPath<SteamDeckDeploySettings>(
-            AssetPath
-          );
+          s_Instance = FindSettingsAsset();
 #endif
         return s_Instance;
       }
     }
+
+#if UNITY_EDITOR
+    /// <summary>
+    /// Locates the settings asset by type, wherever the consumer keeps it. The
+    /// package stores no path: a consumer drops the asset anywhere under Assets/
+    /// (the settings provider creates one under Assets/Settings/ on first use)
+    /// and it is resolved here through the AssetDatabase type index. The first
+    /// match wins when more than one exists.
+    /// </summary>
+    internal static SteamDeckDeploySettings FindSettingsAsset()
+    {
+      var guids = UnityEditor.AssetDatabase.FindAssets("t:SteamDeckDeploySettings");
+      if (guids.Length == 0)
+        return null;
+
+      var path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
+      return UnityEditor.AssetDatabase.LoadAssetAtPath<SteamDeckDeploySettings>(path);
+    }
+#endif
 
     [Header("Connection")]
     [Tooltip("IP address of the Steam Deck on the local network")]

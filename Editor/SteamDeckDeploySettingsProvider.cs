@@ -74,10 +74,10 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       try
       {
         var success = await SteamDeckDeploy.TestConnection();
-        EditorUtility.DisplayDialog(
+        SteamDeckResultDialog.Show(
           "Steam Deck Deploy",
           success ? "Connection successful" : "Connection failed — check Console for details",
-          "OK"
+          success
         );
       }
       finally
@@ -132,18 +132,21 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
     }
 
+    // Consumer-side default home for a freshly created settings asset. Creation
+    // lands here; resolution is by type (FindSettingsAsset), so a consumer may
+    // move the asset anywhere under Assets/ without the package needing to know.
+    const string DefaultSettingsFolder = "Assets/Settings";
+    const string DefaultSettingsPath = DefaultSettingsFolder + "/SteamDeckDeploySettings.asset";
+
     internal static SteamDeckDeploySettings GetOrCreateSettings()
     {
-      var settings = AssetDatabase.LoadAssetAtPath<SteamDeckDeploySettings>(
-        SteamDeckDeploySettings.AssetPath
-      );
+      var settings = SteamDeckDeploySettings.FindSettingsAsset();
       if (settings == null)
       {
         settings = ScriptableObject.CreateInstance<SteamDeckDeploySettings>();
-        var dir = Path.GetDirectoryName(SteamDeckDeploySettings.AssetPath);
-        if (!Directory.Exists(dir))
-          Directory.CreateDirectory(dir);
-        AssetDatabase.CreateAsset(settings, SteamDeckDeploySettings.AssetPath);
+        if (!AssetDatabase.IsValidFolder(DefaultSettingsFolder))
+          AssetDatabase.CreateFolder("Assets", "Settings");
+        AssetDatabase.CreateAsset(settings, DefaultSettingsPath);
         AssetDatabase.SaveAssets();
       }
 
