@@ -1,3 +1,19 @@
+# [2.0.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.2.2...v2.0.0) (2026-06-10)
+
+
+* feat!: drop all hardcoded project paths — consumer-agnostic deploy ([103fb0f](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/103fb0f2f1f83592ce0f51b5f11adc6d8c89a62a))
+
+
+### BREAKING CHANGES
+
+* SteamDeckBuildCli is removed — use the menu item or
+SteamDeckDeploy.BuildActiveProfileAndDeploy(launch). SteamDeckDeploySettings.AssetPath
+is removed; the settings asset is located by type and created under
+Assets/Settings/. The "Deploy to Steam Deck" and "Build and Deploy to Steam
+Deck" menu items are replaced by a single "Build Current Profile to Steam Deck".
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## [1.2.2](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.2.1...v1.2.2) (2026-06-01)
 
 
