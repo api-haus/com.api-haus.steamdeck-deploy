@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v2.0.0...v2.0.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* run Windows builds directly through Proton, not a host exec wrapper ([2e6ba2d](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/2e6ba2da2ea85ad80f0f454fd1279b5c635db336))
+
 # [2.0.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v1.2.2...v2.0.0) (2026-06-10)
 
 
