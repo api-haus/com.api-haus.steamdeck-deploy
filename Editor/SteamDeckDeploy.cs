@@ -67,18 +67,46 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       if (!await Rsync(buildOutputPath, remoteGameDir))
         return Fail("Rsync failed");
 
-      // Step 2.5: Install launch.sh wrapper on the deck. Steam devkit's
-      // create-shortcut IPC tokenizes argv on whitespace, so executables with
-      // spaces (e.g. product names with spaces) would otherwise fail to
-      // register. Routing through a fixed-name wrapper keeps argv space-free.
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Installing launch wrapper...", 0.55f);
-      if (!await WriteLaunchScript(remoteGameDir, executable))
-        return Fail("Launch wrapper install failed");
+      // Step 2.5: Decide the registered launch target, which differs by platform.
+      //
+      // A native Linux build runs through a launch.sh wrapper that execs the
+      // real binary. The wrapper exists so the registered argv stays
+      // whitespace-free regardless of the product name: the devkit's
+      // create-shortcut splits argv on whitespace, so a product name with
+      // spaces would otherwise break registration.
+      //
+      // A Windows build cannot use that wrapper. With steam_play=1 Steam runs
+      // argv[0] through Proton, and a shell script is not a PE — Proton runs
+      // the script on the host, where exec-ing the .exe fails (the deck has no
+      // PE binfmt handler, so "Permission denied", then "Exec format error"
+      // once the executable bit is set). So a Windows build registers its .exe
+      // directly and lets Proton run it, the way Unreal's SteamDeck deploy
+      // does. The tradeoff is that a Windows product name with spaces is
+      // unsupported here, since the bare .exe name then reaches the
+      // whitespace-splitting devkit argv.
+      string launchTarget;
+      if (isWindows)
+      {
+        if (executable.Any(char.IsWhiteSpace))
+          Debug.LogWarning(
+            $"{Tag} Windows executable '{executable}' contains whitespace. The devkit splits argv on "
+            + "whitespace and a Windows .exe cannot run through a wrapper, so launch will likely fail. "
+            + "Use a whitespace-free Product Name for Windows Steam Deck deploys."
+          );
+        launchTarget = "./" + executable;
+      }
+      else
+      {
+        EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Installing launch wrapper...", 0.55f);
+        if (!await WriteLaunchScript(remoteGameDir, executable))
+          return Fail("Launch wrapper install failed");
+        launchTarget = "./launch.sh";
+      }
 
-      // Step 3: Register game shortcut (argv[0] = wrapper, extras as separate elements)
+      // Step 3: Register game shortcut (argv[0] = launch target, extras as separate elements)
       EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Registering game shortcut...", 0.6f);
       var extraArgs = SplitLaunchArgs(settings.launchArgs);
-      if (!await RegisterGame(gameId, remoteGameDir, "./launch.sh", extraArgs, isWindows))
+      if (!await RegisterGame(gameId, remoteGameDir, launchTarget, extraArgs, isWindows))
         return Fail("Game registration failed");
 
       // Step 4: Launch (optional)
