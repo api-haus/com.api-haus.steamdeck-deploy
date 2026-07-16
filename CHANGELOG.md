@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v2.0.1...v2.1.0) (2026-07-16)
+
+
+### Features
+
+* add "Build & Deploy to Steam Deck" menu item for the active build target ([edfc86f](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/edfc86fe13d6aa35f49609da1c7b82a2838c6ab8))
+
 ## [2.0.1](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v2.0.0...v2.0.1) (2026-06-10)
 
 
