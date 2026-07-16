@@ -139,12 +139,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 
       var target = EditorUserBuildSettings.activeBuildTarget;
       var productName = PlayerSettings.productName;
-      var extension = target switch
-      {
-        BuildTarget.StandaloneWindows64 or BuildTarget.StandaloneWindows => ".exe",
-        BuildTarget.StandaloneLinux64 => ".x86_64",
-        _ => "",
-      };
+      var extension = TryGetStandaloneExtension(target, out var ext) ? ext : "";
       var outputPath = $"Builds/{target}/{productName}{extension}";
 
       EditorUtility.DisplayProgressBar("Steam Deck Deploy", $"Building {profile.name}...", 0.1f);
@@ -155,6 +150,55 @@ namespace ApiHaus.SteamDeckDeploy.Editor
         {
           buildProfile = profile,
           locationPathName = outputPath,
+          options = BuildOptions.None,
+        }
+      );
+
+      if (report.summary.result != BuildResult.Succeeded)
+        return Fail($"Build failed: {report.summary.result}");
+
+      var buildDir = Path.GetDirectoryName(Path.GetFullPath(report.summary.outputPath));
+      return await Deploy(buildDir, launch);
+    }
+
+    /// <summary>
+    /// Builds the project's current classic Build Settings — the active build
+    /// target and the enabled scenes — with no Build Profile required, and
+    /// deploys the result to the Steam Deck. The active target must be a Windows
+    /// or Linux standalone (Windows runs via Proton, Linux natively); any other
+    /// target is rejected before the build starts. This backs the "Build &amp;
+    /// Deploy to Steam Deck" menu item, which takes whatever platform is
+    /// currently selected in File > Build Settings.
+    /// </summary>
+    public static async Task<bool> BuildActiveTargetAndDeploy(bool launch = true)
+    {
+      var target = EditorUserBuildSettings.activeBuildTarget;
+      if (!TryGetStandaloneExtension(target, out var extension))
+        return Fail(
+          $"Active build target '{target}' is not supported — only Windows and Linux standalone "
+          + "deploy to the Steam Deck. Switch platform in File > Build Settings."
+        );
+
+      var scenes = EditorBuildSettings.scenes
+        .Where(s => s.enabled)
+        .Select(s => s.path)
+        .ToArray();
+      if (scenes.Length == 0)
+        return Fail("No enabled scenes in Build Settings. Add at least one scene before building.");
+
+      var productName = PlayerSettings.productName;
+      var outputPath = $"Builds/{target}/{productName}{extension}";
+
+      EditorUtility.DisplayProgressBar("Steam Deck Deploy", $"Building {target}...", 0.1f);
+      Debug.Log($"{Tag} Building '{productName}' ({target}) → {outputPath}");
+
+      var report = BuildPipeline.BuildPlayer(
+        new BuildPlayerOptions
+        {
+          scenes = scenes,
+          locationPathName = outputPath,
+          target = target,
+          targetGroup = BuildPipeline.GetBuildTargetGroup(target),
           options = BuildOptions.None,
         }
       );
@@ -528,6 +572,29 @@ namespace ApiHaus.SteamDeckDeploy.Editor
         return Path.GetFileName(file);
 
       return $"{productName}.x86_64";
+    }
+
+    /// <summary>
+    /// Maps a standalone build target to the deck-deployable executable
+    /// extension — .exe for Windows (run via Proton), .x86_64 for Linux (run
+    /// natively). Returns false for any target the deck cannot run, so callers
+    /// can either reject it or fall back to a bare executable name.
+    /// </summary>
+    static bool TryGetStandaloneExtension(BuildTarget target, out string extension)
+    {
+      switch (target)
+      {
+        case BuildTarget.StandaloneWindows64:
+        case BuildTarget.StandaloneWindows:
+          extension = ".exe";
+          return true;
+        case BuildTarget.StandaloneLinux64:
+          extension = ".x86_64";
+          return true;
+        default:
+          extension = null;
+          return false;
+      }
     }
 
     static bool Fail(string message)
