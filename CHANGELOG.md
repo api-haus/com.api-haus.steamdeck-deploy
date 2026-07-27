@@ -1,3 +1,10 @@
+## [2.1.1](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v2.1.0...v2.1.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* survive editor domain reload during rsync, and never block the editor ([a9c44a7](https://github.com/api-haus/com.api-haus.steamdeck-deploy/commit/a9c44a74208d5b88a7edafe6047386e268001559))
+
 # [2.1.0](https://github.com/api-haus/com.api-haus.steamdeck-deploy/compare/v2.0.1...v2.1.0) (2026-07-16)
 
 
