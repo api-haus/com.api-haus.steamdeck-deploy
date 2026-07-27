@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
 using UnityEditor.Build.Profile;
@@ -15,38 +16,49 @@ namespace ApiHaus.SteamDeckDeploy.Editor
   {
     const string Tag = "[SteamDeckDeploy]";
     const string RemoteScriptsDir = "~/unity-scripts";
+    const string ProgressTitle = "Steam Deck Deploy";
+
+    /// <summary>
+    /// Ceiling for a single rsync. A multi-gigabyte player over WiFi routinely
+    /// runs past the five-minute default, and being killed mid-transfer leaves a
+    /// half-written build on the deck. The user has a cancel button in the
+    /// editor's background-task list, so this only has to catch a transfer that
+    /// has genuinely stopped making progress.
+    /// </summary>
+    const int RsyncTimeoutMs = 60 * 60 * 1000;
 
     public static async Task<bool> Deploy(string buildOutputPath, bool launch = true)
     {
+      using var operation = DeployOperation.Begin(ProgressTitle, "Preparing deploy...");
+      // Each await below is a window in which a domain reload would destroy this
+      // method's continuation and leave the deploy half-finished. The lock holds
+      // any reload until the deploy is done.
+      using var reloadLock = ReloadLock.Acquire();
+
       var settings = SteamDeckDeploySettings.Instance;
       if (settings == null)
-      {
-        Debug.LogError(
-          $"{Tag} Settings asset not found. Open Project Settings > Steam Deck Deploy."
+        return Fail(
+          operation,
+          "Settings asset not found. Open Project Settings > Steam Deck Deploy."
         );
-        return false;
-      }
 
       // Auto-discover if IP not configured
       if (string.IsNullOrWhiteSpace(settings.ipAddress))
       {
-        EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Discovering devices...", 0.05f);
+        operation.Report(0.05f, "Discovering devices...");
         if (!await AutoDiscover(settings))
-          return Fail("No Steam Deck found on network. Enable devkit mode on your Steam Deck.");
+          return Fail(
+            operation,
+            "No Steam Deck found on network. Enable devkit mode on your Steam Deck."
+          );
       }
 
       if (!settings.Validate(out var error))
-      {
-        Debug.LogError($"{Tag} {error}");
-        return false;
-      }
+        return Fail(operation, error);
 
       buildOutputPath = Path.GetFullPath(buildOutputPath);
       if (!Directory.Exists(buildOutputPath))
-      {
-        Debug.LogError($"{Tag} Build directory not found: {buildOutputPath}");
-        return false;
-      }
+        return Fail(operation, $"Build directory not found: {buildOutputPath}");
 
       var productName = PlayerSettings.productName;
       var executable = FindExecutable(buildOutputPath, productName);
@@ -58,14 +70,14 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       var remoteGameDir = $"{settings.remoteBasePath}/{gameId}";
 
       // Step 1: Upload helper scripts
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Uploading scripts...", 0.1f);
-      if (!await UploadScripts())
-        return Fail("Script upload failed");
+      operation.Report(0.1f, "Uploading scripts...");
+      if (!await UploadScripts(operation.Token))
+        return Fail(operation, "Script upload failed");
 
       // Step 2: Rsync build to Steam Deck
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Uploading build via rsync...", 0.2f);
-      if (!await Rsync(buildOutputPath, remoteGameDir))
-        return Fail("Rsync failed");
+      operation.Report(0.2f, "Uploading build via rsync...");
+      if (!await Rsync(buildOutputPath, remoteGameDir, operation.Token))
+        return Fail(operation, operation.IsCancelled ? "Deploy cancelled" : "Rsync failed");
 
       // Step 2.5: Decide the registered launch target, which differs by platform.
       //
@@ -97,27 +109,27 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
       else
       {
-        EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Installing launch wrapper...", 0.55f);
+        operation.Report(0.55f, "Installing launch wrapper...");
         if (!await WriteLaunchScript(remoteGameDir, executable))
-          return Fail("Launch wrapper install failed");
+          return Fail(operation, "Launch wrapper install failed");
         launchTarget = "./launch.sh";
       }
 
       // Step 3: Register game shortcut (argv[0] = launch target, extras as separate elements)
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Registering game shortcut...", 0.6f);
+      operation.Report(0.6f, "Registering game shortcut...");
       var extraArgs = SplitLaunchArgs(settings.launchArgs);
       if (!await RegisterGame(gameId, remoteGameDir, launchTarget, extraArgs, isWindows))
-        return Fail("Game registration failed");
+        return Fail(operation, "Game registration failed");
 
       // Step 4: Launch (optional)
       if (launch)
       {
-        EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Launching game...", 0.9f);
+        operation.Report(0.9f, "Launching game...");
         if (!await LaunchGame(gameId))
-          return Fail("Game launch failed");
+          return Fail(operation, "Game launch failed");
       }
 
-      EditorUtility.ClearProgressBar();
+      operation.Report(1f, "Deploy complete");
       Debug.Log($"{Tag} Deploy completed successfully to {settings.ipAddress}");
       return true;
     }
@@ -133,16 +145,18 @@ namespace ApiHaus.SteamDeckDeploy.Editor
     /// </summary>
     public static async Task<bool> BuildActiveProfileAndDeploy(bool launch = true)
     {
+      using var operation = DeployOperation.Begin(ProgressTitle, "Preparing build...");
+
       var profile = BuildProfile.GetActiveBuildProfile();
       if (profile == null)
-        return Fail("No active build profile. Select one in File > Build Profiles.");
+        return Fail(operation, "No active build profile. Select one in File > Build Profiles.");
 
       var target = EditorUserBuildSettings.activeBuildTarget;
       var productName = PlayerSettings.productName;
       var extension = TryGetStandaloneExtension(target, out var ext) ? ext : "";
       var outputPath = $"Builds/{target}/{productName}{extension}";
 
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", $"Building {profile.name}...", 0.1f);
+      operation.Report(0.1f, $"Building {profile.name}...");
       Debug.Log($"{Tag} Building '{productName}' ({target}) via profile '{profile.name}' → {outputPath}");
 
       var report = BuildPipeline.BuildPlayer(
@@ -155,7 +169,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       );
 
       if (report.summary.result != BuildResult.Succeeded)
-        return Fail($"Build failed: {report.summary.result}");
+        return Fail(operation, $"Build failed: {report.summary.result}");
 
       var buildDir = Path.GetDirectoryName(Path.GetFullPath(report.summary.outputPath));
       return await Deploy(buildDir, launch);
@@ -172,9 +186,12 @@ namespace ApiHaus.SteamDeckDeploy.Editor
     /// </summary>
     public static async Task<bool> BuildActiveTargetAndDeploy(bool launch = true)
     {
+      using var operation = DeployOperation.Begin(ProgressTitle, "Preparing build...");
+
       var target = EditorUserBuildSettings.activeBuildTarget;
       if (!TryGetStandaloneExtension(target, out var extension))
         return Fail(
+          operation,
           $"Active build target '{target}' is not supported — only Windows and Linux standalone "
           + "deploy to the Steam Deck. Switch platform in File > Build Settings."
         );
@@ -184,12 +201,15 @@ namespace ApiHaus.SteamDeckDeploy.Editor
         .Select(s => s.path)
         .ToArray();
       if (scenes.Length == 0)
-        return Fail("No enabled scenes in Build Settings. Add at least one scene before building.");
+        return Fail(
+          operation,
+          "No enabled scenes in Build Settings. Add at least one scene before building."
+        );
 
       var productName = PlayerSettings.productName;
       var outputPath = $"Builds/{target}/{productName}{extension}";
 
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", $"Building {target}...", 0.1f);
+      operation.Report(0.1f, $"Building {target}...");
       Debug.Log($"{Tag} Building '{productName}' ({target}) → {outputPath}");
 
       var report = BuildPipeline.BuildPlayer(
@@ -204,7 +224,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       );
 
       if (report.summary.result != BuildResult.Succeeded)
-        return Fail($"Build failed: {report.summary.result}");
+        return Fail(operation, $"Build failed: {report.summary.result}");
 
       var buildDir = Path.GetDirectoryName(Path.GetFullPath(report.summary.outputPath));
       return await Deploy(buildDir, launch);
@@ -212,28 +232,31 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 
     public static async Task<bool> TestConnection()
     {
+      using var operation = DeployOperation.Begin(ProgressTitle, "Testing connection...");
+      using var reloadLock = ReloadLock.Acquire();
+
       var settings = SteamDeckDeploySettings.Instance;
       if (settings == null)
-      {
-        Debug.LogError($"{Tag} Settings asset not found");
-        return false;
-      }
+        return Fail(operation, "Settings asset not found");
 
       if (!settings.Validate(out var error))
-      {
-        Debug.LogError($"{Tag} {error}");
-        return false;
-      }
+        return Fail(operation, error);
 
       var success = await SshCommand("echo ok");
 
       if (success)
         Debug.Log($"{Tag} Connection to {settings.ipAddress} successful");
+      else
+        operation.Fail();
 
       return success;
     }
 
-    public static async Task<bool> Rsync(string localPath, string remotePath)
+    public static async Task<bool> Rsync(
+      string localPath,
+      string remotePath,
+      CancellationToken cancellation = default
+    )
     {
       var settings = SteamDeckDeploySettings.Instance;
       var sshKeyPath = settings.ResolvedSshKeyPath;
@@ -249,7 +272,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 
       Debug.Log($"{Tag} rsync → {settings.ipAddress}:{remotePath}");
 
-      var result = await ProcessRunner.RunAsync("rsync", args);
+      var result = await ProcessRunner.RunAsync("rsync", args, RsyncTimeoutMs, cancellation);
 
       if (!result.Success)
         Debug.LogError($"{Tag} rsync failed (exit {result.ExitCode}):\n{result.Error}");
@@ -349,7 +372,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       var args = $"-avz {extraArgs ?? ""} -e \"{sshCmd}\" \"{localPath}/\" \"{remote}\"".Trim();
 
       Debug.Log($"{Tag} push → {settings.ipAddress}:{remotePath}");
-      var result = await ProcessRunner.RunAsync("rsync", args);
+      var result = await ProcessRunner.RunAsync("rsync", args, RsyncTimeoutMs);
 
       if (!result.Success)
         Debug.LogError($"{Tag} push failed (exit {result.ExitCode}):\n{result.Error}");
@@ -378,7 +401,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       var args = $"-avz {extraArgs ?? ""} -e \"{sshCmd}\" \"{remote}\" \"{localPath}/\"".Trim();
 
       Debug.Log($"{Tag} pull ← {settings.ipAddress}:{remotePath}");
-      var result = await ProcessRunner.RunAsync("rsync", args);
+      var result = await ProcessRunner.RunAsync("rsync", args, RsyncTimeoutMs);
 
       if (!result.Success)
         Debug.LogError($"{Tag} pull failed (exit {result.ExitCode}):\n{result.Error}");
@@ -414,7 +437,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       return (result.Success, result.Output);
     }
 
-    static async Task<bool> UploadScripts()
+    static async Task<bool> UploadScripts(CancellationToken cancellation = default)
     {
       // Find Scripts~ directory relative to the package
       var scriptsDir = Path.GetFullPath(
@@ -428,7 +451,7 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
 
       Debug.Log($"{Tag} Uploading helper scripts to {RemoteScriptsDir}");
-      return await Rsync(scriptsDir, RemoteScriptsDir);
+      return await Rsync(scriptsDir, RemoteScriptsDir, cancellation);
     }
 
     static async Task<bool> SshCommand(string command)
@@ -461,9 +484,15 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 
     internal static async Task<bool> AutoDiscover(SteamDeckDeploySettings settings)
     {
+      using var operation = DeployOperation.Begin(ProgressTitle, "Searching for devices...");
+      using var reloadLock = ReloadLock.Acquire();
+
       var devices = await DevkitDiscovery.Discover();
       if (devices.Count == 0)
+      {
+        operation.Fail();
         return false;
+      }
 
       var device = devices[0];
       settings.ipAddress = device.Address;
@@ -597,9 +626,9 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
     }
 
-    static bool Fail(string message)
+    static bool Fail(DeployOperation operation, string message)
     {
-      EditorUtility.ClearProgressBar();
+      operation.Fail();
       Debug.LogError($"{Tag} {message}");
       return false;
     }

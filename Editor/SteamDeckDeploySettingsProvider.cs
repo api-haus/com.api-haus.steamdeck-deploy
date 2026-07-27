@@ -49,6 +49,9 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 
           EditorGUILayout.Space();
 
+          // A deploy no longer blocks the editor, so these stay reachable while
+          // one is running. Disable them for the duration instead.
+          using (new EditorGUI.DisabledScope(DeployOperation.IsActive))
           using (new EditorGUILayout.HorizontalScope())
           {
             if (GUILayout.Button("Test Connection", GUILayout.Width(140)))
@@ -57,11 +60,20 @@ namespace ApiHaus.SteamDeckDeploy.Editor
             if (GUILayout.Button("Deploy Now", GUILayout.Width(140)))
               DeployNow(settings);
           }
+
+          if (DeployOperation.IsActive)
+            EditorGUILayout.HelpBox(
+              "A deploy is running. Track or cancel it from the background task in the status bar.",
+              MessageType.Info
+            );
         },
         keywords = new HashSet<string> { "Steam", "Deck", "Deploy", "SSH", "rsync", "devkit" },
       };
     }
 
+    // Progress for every one of these lives in SteamDeckDeploy, on a non-modal
+    // UnityEditor.Progress indicator that a domain reload cannot strand. See
+    // DeployOperation for why a modal progress bar cannot be used here.
     static async void TestConnection(SteamDeckDeploySettings settings)
     {
       if (!settings.Validate(out var error))
@@ -70,24 +82,19 @@ namespace ApiHaus.SteamDeckDeploy.Editor
         return;
       }
 
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Testing connection...", 0.5f);
-      try
-      {
-        var success = await SteamDeckDeploy.TestConnection();
-        SteamDeckResultDialog.Show(
-          "Steam Deck Deploy",
-          success ? "Connection successful" : "Connection failed — check Console for details",
-          success
-        );
-      }
-      finally
-      {
-        EditorUtility.ClearProgressBar();
-      }
+      var success = await SteamDeckDeploy.TestConnection();
+      SteamDeckResultDialog.Show(
+        "Steam Deck Deploy",
+        success ? "Connection successful" : "Connection failed — check Console for details",
+        success
+      );
     }
 
     static async void DeployNow(SteamDeckDeploySettings settings)
     {
+      if (DeployOperation.RejectIfBusy())
+        return;
+
       if (!settings.Validate(out var error))
       {
         EditorUtility.DisplayDialog("Steam Deck Deploy", error, "OK");
@@ -115,21 +122,16 @@ namespace ApiHaus.SteamDeckDeploy.Editor
 
     static async void DiscoverDevice(SteamDeckDeploySettings settings)
     {
-      EditorUtility.DisplayProgressBar("Steam Deck Deploy", "Searching for devices...", 0.5f);
-      try
-      {
-        var success = await SteamDeckDeploy.AutoDiscover(settings);
-        if (!success)
-          EditorUtility.DisplayDialog(
-            "Steam Deck Deploy",
-            "No Steam Deck found. Ensure devkit mode is enabled and the device is on the same network.",
-            "OK"
-          );
-      }
-      finally
-      {
-        EditorUtility.ClearProgressBar();
-      }
+      if (DeployOperation.RejectIfBusy())
+        return;
+
+      var success = await SteamDeckDeploy.AutoDiscover(settings);
+      if (!success)
+        EditorUtility.DisplayDialog(
+          "Steam Deck Deploy",
+          "No Steam Deck found. Ensure devkit mode is enabled and the device is on the same network.",
+          "OK"
+        );
     }
 
     // Consumer-side default home for a freshly created settings asset. Creation

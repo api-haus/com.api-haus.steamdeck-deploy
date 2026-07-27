@@ -8,6 +8,9 @@ namespace ApiHaus.SteamDeckDeploy.Editor
     [MenuItem("Build/Build & Deploy to Steam Deck")]
     static async void BuildAndDeployToSteamDeck()
     {
+      if (DeployOperation.RejectIfBusy())
+        return;
+
       try
       {
         var settings = SteamDeckDeploySettingsProvider.GetOrCreateSettings();
@@ -15,7 +18,6 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
       catch (System.Exception e)
       {
-        EditorUtility.ClearProgressBar();
         Debug.LogException(e);
       }
     }
@@ -23,6 +25,9 @@ namespace ApiHaus.SteamDeckDeploy.Editor
     [MenuItem("Build/Build Current Profile to Steam Deck")]
     static async void BuildCurrentProfileToSteamDeck()
     {
+      if (DeployOperation.RejectIfBusy())
+        return;
+
       try
       {
         var settings = SteamDeckDeploySettingsProvider.GetOrCreateSettings();
@@ -30,7 +35,6 @@ namespace ApiHaus.SteamDeckDeploy.Editor
       }
       catch (System.Exception e)
       {
-        EditorUtility.ClearProgressBar();
         Debug.LogException(e);
       }
     }
